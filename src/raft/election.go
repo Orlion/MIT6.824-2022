@@ -212,13 +212,13 @@ func (rf *Raft) ticker() {
 func (rf *Raft) broadcastHeartbeat() {
 	for rf.killed() == false {
 		rf.mu.Lock()
-		// 等待成为leader之后再执行
 		if rf.role == Leader {
-			DPrintf("server[%d] 心跳广播", rf.me)
+			DPrintf("server:[%d] 心跳广播", rf.me)
 
 			args := &AppendEntriesArgs{
-				Term:     rf.currentTerm,
-				LeaderId: rf.me,
+				Term:         rf.currentTerm,
+				LeaderId:     rf.me,
+				LeaderCommit: rf.commitIndex,
 			}
 			for peer := range rf.peers {
 				if peer != rf.me {
@@ -233,6 +233,8 @@ func (rf *Raft) broadcastHeartbeat() {
 								rf.changeRoleLocked(Follower)
 							}
 							rf.mu.Unlock()
+						} else {
+							DPrintf("server:[%d] sendHeartbeat to [%d] failed", rf.me, server)
 						}
 					}(peer)
 				}

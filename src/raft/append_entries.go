@@ -18,10 +18,11 @@ type AppendEntriesReply struct {
 // AppendEntries handler
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	msgType := "AppendEntries"
 	rf.mu.Lock()
 	defer func() {
 		rf.mu.Unlock()
-		DPrintf("server:[%d] AppendEntries from [%d] args: %v, reply: %v", rf.me, args.LeaderId, args, reply)
+		DPrintf("server:[%d] %s from [%d]", rf.me, msgType, args.LeaderId)
 	}()
 	if rf.currentTerm > args.Term {
 		reply.Term = rf.currentTerm
@@ -37,9 +38,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.changeRoleLocked(Follower)
 	rf.electionTimer.Reset(randElectronTimeout())
 
+	reply.Term = rf.currentTerm
+
 	if len(args.Entries) < 1 {
+		msgType = "Heartbeat"
+		rf.modifyFollowerCommitIndexLocked(args.LeaderCommit)
 		// 没有日志则为心跳包直接返回成功
-		reply.Term, reply.Success = rf.currentTerm, true
+		reply.Success = true
 		return
 	}
 
@@ -47,7 +52,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 追加日志到本机
 	// 检查上一条日志任期是否符合
-	if len(rf.log) < args.PrevLogIndex+1 || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if args.PrevLogIndex > -1 && (len(rf.log) < args.PrevLogIndex+1 || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm) {
 		return
 	}
 
@@ -61,12 +66,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.persist()
 
 	// 更新commitIndex
-	if args.LeaderCommit > rf.commitIndex {
-		if len(rf.log)-1 < args.LeaderCommit {
+	rf.modifyFollowerCommitIndexLocked(args.LeaderCommit)
+}
+
+func (rf *Raft) modifyFollowerCommitIndexLocked(leaderCommit int) {
+	if leaderCommit > rf.commitIndex {
+		if len(rf.log)-1 < leaderCommit {
 			rf.commitIndex = len(rf.log) - 1
 		} else {
-			rf.commitIndex = args.LeaderCommit
+			rf.commitIndex = leaderCommit
 		}
+
+		rf.applyCond.Broadcast()
 	}
 }
 

@@ -65,12 +65,13 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-	roleCond  *sync.Cond
+	mu            sync.Mutex          // Lock to protect shared access to this peer's state
+	peers         []*labrpc.ClientEnd // RPC end points of all peers
+	persister     *Persister          // Object to hold this peer's persisted state
+	me            int                 // this peer's index into peers[]
+	dead          int32               // set by Kill()
+	broadcastCond *sync.Cond
+	applyCond     *sync.Cond
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -203,7 +204,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	defer func() {
+		rf.mu.Unlock()
+		DPrintf("server:[%d] Start index:[%d], term:[%d], isLeader:[%v]", rf.me, index, term, isLeader)
+	}()
 	for {
 		if rf.killed() {
 			isLeader = false
@@ -217,14 +221,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 
 		// 写入到本地日志中
-		term := rf.currentTerm
+		term = rf.currentTerm
 		index = len(rf.log)
 		rf.log = append(rf.log, Entry{
 			Command: command,
 			Term:    term,
 		})
 		rf.persist()
-		// boardcast协程会不断的同步日志
+
+		rf.nextIndex[rf.me] = index + 1
+		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]
+
+		// 通知boardcast协程同步日志
+		rf.broadcastCond.Broadcast()
+
 		break
 	}
 
@@ -254,6 +264,9 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) changeRoleLocked(role Role) {
 	rf.role = role
+	if role == Leader {
+		rf.broadcastCond.Broadcast()
+	}
 }
 
 //
@@ -271,7 +284,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.mu = sync.Mutex{}
-	rf.roleCond = sync.NewCond(&rf.mu)
+	rf.broadcastCond = sync.NewCond(&rf.mu)
+	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
@@ -279,11 +293,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
+	for peer := range peers {
+		rf.nextIndex[peer] = 1
+	}
 
-	rf.commitIndex = -1
-	rf.lastApplied = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	// 默认为follower
 	rf.role = Follower
+
+	rf.log = make([]Entry, 1)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -291,8 +310,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	rf.electionTimer = time.NewTimer(randElectronTimeout())
 
+	// 广播日志
+	rf.broadcastLog()
+	// 心跳检测
 	go rf.ticker()
+	// 广播心跳
 	go rf.broadcastHeartbeat()
+	// 异步apply
+	go rf.applier(applyCh)
 
 	return rf
 }
