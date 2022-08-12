@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -8,13 +9,17 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
-		log.Printf(time.Now().Format("2006-01-02 15:04:05.000000000")+format, a...)
+		log.Printf(format, a...)
 	}
 	return
+}
+
+func formatRaft(rf *Raft) string {
+	return fmt.Sprintf("{server:[%d] - role:[%d],term:[%d],vote:[%d],commit:[%d],apply:[%d],log:[%d]}", rf.me, rf.role, rf.currentTerm, rf.votedFor, rf.commitIndex, rf.lastApplied, len(rf.log))
 }
 
 func randElectronTimeout() time.Duration {

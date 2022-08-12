@@ -18,11 +18,10 @@ type AppendEntriesReply struct {
 // AppendEntries handler
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	msgType := "AppendEntries"
 	rf.mu.Lock()
 	defer func() {
 		rf.mu.Unlock()
-		DPrintf("server:[%d] %s from [%d]", rf.me, msgType, args.LeaderId)
+		DPrintf("%s AppendEntries from [%d]", formatRaft(rf), args.LeaderId)
 	}()
 	if rf.currentTerm > args.Term {
 		reply.Term = rf.currentTerm
@@ -40,14 +39,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 
-	if len(args.Entries) < 1 {
-		msgType = "Heartbeat"
-		rf.modifyFollowerCommitIndexLocked(args.LeaderCommit)
-		// 没有日志则为心跳包直接返回成功
-		reply.Success = true
-		return
-	}
-
 	// todo: 更新LeadedId
 
 	// 追加日志到本机
@@ -59,22 +50,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 验证没有问题回复成功
 	reply.Success = true
 
-	// 验证没有问题之后将leader同步过来的日志添加到本机
-	// 先将PrevLogIndex之后的日志全部删除掉再appendleader同步过来的日志
-	rf.log = rf.log[:args.PrevLogIndex+1]
-	rf.log = append(rf.log, args.Entries...)
-	rf.persist()
+	if len(args.Entries) > 0 {
+		// 验证没有问题之后将leader同步过来的日志添加到本机
+		// 先将PrevLogIndex之后的日志全部删除掉再appendleader同步过来的日志
+		rf.log = rf.log[:args.PrevLogIndex+1]
+		rf.log = append(rf.log, args.Entries...)
+		rf.persist()
+	}
 
 	// 更新commitIndex
-	rf.modifyFollowerCommitIndexLocked(args.LeaderCommit)
-}
-
-func (rf *Raft) modifyFollowerCommitIndexLocked(leaderCommit int) {
-	if leaderCommit > rf.commitIndex {
-		if len(rf.log)-1 < leaderCommit {
+	if args.LeaderCommit > rf.commitIndex {
+		if len(rf.log)-1 < args.LeaderCommit {
 			rf.commitIndex = len(rf.log) - 1
 		} else {
-			rf.commitIndex = leaderCommit
+			rf.commitIndex = args.LeaderCommit
 		}
 
 		rf.applyCond.Broadcast()

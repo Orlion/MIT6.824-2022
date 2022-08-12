@@ -36,7 +36,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer func() {
 		rf.mu.Unlock()
-		DPrintf("server:[%d] RequestVote from [%d] args: %v reply: %v, opposeReason:[%s]", rf.me, args.CandidateId, args, reply, opposeReason)
+		DPrintf("%s RequestVote from [%d] args: %v reply: %v, opposeReason:[%s]", formatRaft(rf), args.CandidateId, args, reply, opposeReason)
 	}()
 
 	reply.Term = rf.currentTerm
@@ -157,7 +157,7 @@ func (rf *Raft) startElectionLocked() {
 			go func(server int) {
 				reply := new(RequestVoteReply)
 				if rf.sendRequestVote(server, args, reply) {
-					DPrintf("server:[%d] sendRequestVote to [%d] args: %v, reply: %v", rf.me, server, args, reply)
+					DPrintf("%s sendRequestVote to [%d] args: %v, reply: %v", formatRaft(rf), server, args, reply)
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
 					if rf.currentTerm != args.Term || rf.role != Candidate {
@@ -171,7 +171,7 @@ func (rf *Raft) startElectionLocked() {
 						if grantedNum*2 > len(rf.peers) {
 							// 票数过半，成为leader
 							rf.changeRoleLocked(Leader)
-							DPrintf("server:[%d] 成为leader", rf.me)
+							DPrintf("%s 成为leader", formatRaft(rf))
 						}
 					} else if rf.currentTerm < reply.Term {
 						// 收到的回复中有更新的任期则转变角色为follower，并等待leader的心跳
@@ -180,7 +180,7 @@ func (rf *Raft) startElectionLocked() {
 						rf.persist()
 					}
 				} else {
-					DPrintf("server:[%d] sendRequestVote to [%d] args: %v failed", rf.me, server, args)
+					DPrintf("%s sendRequestVote to [%d] args: %v failed", formatRaft(rf), server, args)
 				}
 			}(peer)
 		}
@@ -197,8 +197,9 @@ func (rf *Raft) ticker() {
 		<-rf.electionTimer.C
 		// 心跳已超时，尝试发起选举
 		rf.mu.Lock()
+		DPrintf("%s 心跳超时", formatRaft(rf))
 		if rf.role != Leader {
-			DPrintf("server:[%d] 心跳超时，尝试发起选举", rf.me)
+			DPrintf("%s 心跳超时，尝试发起选举", formatRaft(rf))
 			// 没有收到心跳，开启新一轮选举
 			rf.startElectionLocked()
 		}
@@ -213,19 +214,23 @@ func (rf *Raft) broadcastHeartbeat() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if rf.role == Leader {
-			DPrintf("server:[%d] 心跳广播", rf.me)
-
-			args := &AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				LeaderCommit: rf.commitIndex,
-			}
+			DPrintf("%s 开始心跳广播", formatRaft(rf))
 			for peer := range rf.peers {
 				if peer != rf.me {
 					go func(server int) {
+						args := new(AppendEntriesArgs)
+						args.Term = rf.currentTerm
+						args.LeaderId = rf.me
+						args.PrevLogIndex = rf.nextIndex[server] - 1
+						args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
+						if args.PrevLogIndex < len(rf.log)-1 {
+							args.Entries = rf.log[args.PrevLogIndex+1:]
+						}
+						args.LeaderCommit = rf.commitIndex
+
 						reply := new(AppendEntriesReply)
 						if rf.sendAppendEntries(server, args, reply) {
-							DPrintf("server:[%d] sendHeartbeat to [%d] args: %v, reply: %v", rf.me, server, args, reply)
+							DPrintf("%s sendHeartbeat to [%d] args: %v, reply: %v", formatRaft(rf), server, args, reply)
 							rf.mu.Lock()
 							if rf.currentTerm < reply.Term {
 								rf.currentTerm, rf.votedFor = reply.Term, -1
@@ -234,7 +239,7 @@ func (rf *Raft) broadcastHeartbeat() {
 							}
 							rf.mu.Unlock()
 						} else {
-							DPrintf("server:[%d] sendHeartbeat to [%d] failed", rf.me, server)
+							DPrintf("%s sendHeartbeat to [%d] failed", formatRaft(rf), server)
 						}
 					}(peer)
 				}

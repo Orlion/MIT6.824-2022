@@ -206,7 +206,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer func() {
 		rf.mu.Unlock()
-		DPrintf("server:[%d] Start index:[%d], term:[%d], isLeader:[%v]", rf.me, index, term, isLeader)
+		DPrintf("%s Start index:[%d], term:[%d], isLeader:[%v], command:%d", formatRaft(rf), index, term, isLeader, command)
 	}()
 	for {
 		if rf.killed() {
@@ -230,7 +230,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.persist()
 
 		rf.nextIndex[rf.me] = index + 1
-		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]
+		rf.matchIndex[rf.me] = index
 
 		// 通知boardcast协程同步日志
 		rf.broadcastCond.Broadcast()
@@ -310,12 +310,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	rf.electionTimer = time.NewTimer(randElectronTimeout())
 
-	// 广播日志
-	rf.broadcastLog()
 	// 心跳检测
 	go rf.ticker()
-	// 广播心跳
-	go rf.broadcastHeartbeat()
+	// 广播日志
+	go rf.broadcastLog()
 	// 异步apply
 	go rf.applier(applyCh)
 

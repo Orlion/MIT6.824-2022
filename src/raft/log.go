@@ -2,6 +2,7 @@ package raft
 
 import (
 	"fmt"
+	"time"
 
 	"6.824/pkg/findk"
 )
@@ -18,10 +19,11 @@ func (rf *Raft) broadcastLog() {
 		if peer != rf.me {
 			go func(server int) {
 				args := new(AppendEntriesArgs)
+				var lastHeartbeatTime time.Time
 				for rf.killed() == false {
 					rf.mu.Lock()
 
-					for rf.role != Leader || rf.matchIndex[server] >= len(rf.log)-1 {
+					for rf.role != Leader || (time.Now().Sub(lastHeartbeatTime) < heartbeatTime() && rf.matchIndex[server] >= len(rf.log)-1) {
 						// 只有当节点为leader并且还存在未复制到目标节点的日志时才进行同步否则等待
 						rf.broadcastCond.Wait()
 					}
@@ -33,45 +35,59 @@ func (rf *Raft) broadcastLog() {
 					args.Entries = rf.log[args.PrevLogIndex+1:]
 					args.LeaderCommit = rf.commitIndex
 
+					rf.mu.Unlock()
+
 					reply := new(AppendEntriesReply)
 					if rf.sendAppendEntries(server, args, reply) {
-						DPrintf("server:[%d] sendAppendEntries to [%d]", rf.me, server)
-						if reply.Success {
-							// 同步成功
-							rf.nextIndex[server] += len(args.Entries)
-							rf.matchIndex[server] = rf.nextIndex[server] - 1
-							// 计算新的commitIndex，即所有matchIndex的中位数
-							newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2)
-							if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
-								// 只能提交当前任期内的日志
-								DPrintf("server:[%d] commitIndex: %d => %d", rf.me, rf.commitIndex, newCommitIndex)
-								rf.commitIndex = newCommitIndex
-								// 通知applier可以apply
-								rf.applyCond.Broadcast()
-							}
-						} else {
-							// 同步失败
+						rf.mu.Lock()
+
+						DPrintf("%s sendAppendEntries to [%d] reply:{term: %d, success: %v}", formatRaft(rf), server, reply.Term, reply.Success)
+
+						if rf.currentTerm == args.Term {
 							if reply.Term > rf.currentTerm {
 								// 有一个新的任期
 								rf.currentTerm, rf.votedFor = reply.Term, -1
 								rf.persist()
 								rf.changeRoleLocked(Follower)
 							} else {
-								// 日志不匹配，回退nextIndex
-								rf.nextIndex[server]--
-								if rf.nextIndex[server] < 1 {
-									panic(fmt.Sprintf("rf.nextIndex[%d] < 1", server))
+								if reply.Success {
+									// 同步成功
+									rf.nextIndex[server] += len(args.Entries)
+									rf.matchIndex[server] = rf.nextIndex[server] - 1
+									// 计算新的commitIndex，即所有matchIndex的中位数
+									newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
+									if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
+										// 只能提交当前任期内的日志
+										DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
+										rf.commitIndex = newCommitIndex
+										// 通知applier可以apply
+										rf.applyCond.Broadcast()
+									}
+								} else {
+									// 日志不匹配，回退nextIndex
+									rf.nextIndex[server]--
+									if rf.nextIndex[server] < 1 {
+										panic(fmt.Sprintf("rf.nextIndex[%d] < 1", server))
+									}
 								}
 							}
 						}
+
+						rf.mu.Unlock()
 					} else {
-						DPrintf("server:[%d] sendAppendEntries to [%d] failed", rf.me, server)
+						DPrintf("%s sendAppendEntries to [%d] failed", formatRaft(rf), server)
 					}
 
-					rf.mu.Unlock()
+					lastHeartbeatTime = time.Now()
 				}
 			}(peer)
 		}
+	}
+
+	for {
+		// 每隔一定时间广播一次心跳
+		rf.broadcastCond.Broadcast()
+		time.Sleep(heartbeatTime())
 	}
 }
 
@@ -92,13 +108,13 @@ func (rf *Raft) applier(applyCh chan ApplyMsg) {
 				Command:      rf.log[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
 			})
+			DPrintf("%s applyMsg's CommandIndex:%d Command:%v", formatRaft(rf), rf.lastApplied, rf.log[rf.lastApplied].Command)
 		}
 
 		rf.mu.Unlock()
 
 		for _, msg := range applyMsgs {
 			applyCh <- msg
-			DPrintf("server:[%d] applyMsg's CommendIndex %d", rf.me, msg.CommandIndex)
 		}
 	}
 }
