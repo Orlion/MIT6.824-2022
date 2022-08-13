@@ -316,6 +316,5 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.broadcastLog()
 	// 异步apply
 	go rf.applier(applyCh)
-
 	return rf
 }

@@ -23,8 +23,26 @@ func (rf *Raft) broadcastLog() {
 				for rf.killed() == false {
 					rf.mu.Lock()
 
-					for rf.role != Leader || (time.Now().Sub(lastHeartbeatTime) < heartbeatTime() && rf.matchIndex[server] >= len(rf.log)-1) {
+					// for rf.role != Leader || (time.Now().Sub(lastHeartbeatTime) < heartbeatTime() && rf.matchIndex[server] >= len(rf.log)-1) {
+					for rf.role != Leader || (rf.matchIndex[server] >= len(rf.log)-1) {
 						// 只有当节点为leader并且还存在未复制到目标节点的日志时才进行同步否则等待
+						rf.broadcastCond.Wait()
+					}
+
+					for {
+						if rf.role == Leader {
+							now := time.Now()
+							if now.Sub(lastHeartbeatTime) > heartbeatTime() {
+								lastHeartbeatTime = now
+								DPrintf("%s 开始心跳广播", formatRaft(rf))
+								break
+							}
+
+							if rf.matchIndex[server] >= len(rf.log)-1 {
+								break
+							}
+						}
+
 						rf.broadcastCond.Wait()
 					}
 
@@ -78,7 +96,7 @@ func (rf *Raft) broadcastLog() {
 						DPrintf("%s sendAppendEntries to [%d] failed", formatRaft(rf), server)
 					}
 
-					lastHeartbeatTime = time.Now()
+					// lastHeartbeatTime = time.Now()
 				}
 			}(peer)
 		}
