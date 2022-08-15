@@ -37,8 +37,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer func() {
-		rf.mu.Unlock()
 		DPrintf("%s RequestVote from [%d] args: %v reply: %v, opposeReason:[%s]", formatRaft(rf), args.CandidateId, args, reply, opposeReason)
+		rf.mu.Unlock()
 	}()
 
 	reply.Term = rf.currentTerm
@@ -68,7 +68,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 对于日志没有自己新的候选人会拒绝
 	// 新：任期较大的比较新，任期相同的话日志较长的较新
 	if !rf.isLogUpToDateLocked(args.LastLogTerm, args.LastLogIndex) {
-		opposeReason = fmt.Sprintf("日志没有自己新")
+		opposeReason = "日志没有自己新"
 		return
 	}
 
@@ -84,7 +84,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // 任期较大的比较新，任期相同的话日志较长的较新
 func (rf *Raft) isLogUpToDateLocked(term, index int) bool {
 	lastLogTerm := rf.getLastLogTermLocked()
-	return term >= lastLogTerm || (term == lastLogTerm && index >= rf.getLastLogIndexLocked())
+	return term > lastLogTerm || (term == lastLogTerm && index >= rf.getLastLogIndexLocked())
 }
 
 // 获取最后一条日志的term
@@ -251,16 +251,20 @@ func (rf *Raft) broadcastHeartbeat() {
 								} else {
 									if reply.Success {
 										// 同步成功
-										rf.nextIndex[server] += len(args.Entries)
-										rf.matchIndex[server] = rf.nextIndex[server] - 1
-										// 计算新的commitIndex，即所有matchIndex的中位数
-										newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
-										if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
-											// 只能提交当前任期内的日志
-											DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
-											rf.commitIndex = newCommitIndex
-											// 通知applier可以apply
-											rf.applyCond.Broadcast()
+										// 注意可能会加多次所以使用args.PrevLogIndex来计算
+										newMatchIndex := args.PrevLogIndex + len(args.Entries)
+										if newMatchIndex > rf.matchIndex[server] {
+											rf.matchIndex[server] = newMatchIndex
+											rf.nextIndex[server] = rf.matchIndex[server] + 1
+											// 计算新的commitIndex，即所有matchIndex的中位数
+											newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
+											if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
+												// 只能提交当前任期内的日志
+												DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
+												rf.commitIndex = newCommitIndex
+												// 通知applier可以apply
+												rf.applyCond.Broadcast()
+											}
 										}
 									} else {
 										// 日志不匹配，回退nextIndex

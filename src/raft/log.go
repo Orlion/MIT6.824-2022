@@ -49,16 +49,20 @@ func (rf *Raft) broadcastLog() {
 							} else {
 								if reply.Success {
 									// 同步成功
-									rf.nextIndex[server] += len(args.Entries)
-									rf.matchIndex[server] = rf.nextIndex[server] - 1
-									// 计算新的commitIndex，即所有matchIndex的中位数
-									newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
-									if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
-										// 只能提交当前任期内的日志
-										DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
-										rf.commitIndex = newCommitIndex
-										// 通知applier可以apply
-										rf.applyCond.Broadcast()
+									// 注意可能会加多次所以使用args.PrevLogIndex来计算
+									newMatchIndex := args.PrevLogIndex + len(args.Entries)
+									if newMatchIndex > rf.matchIndex[server] {
+										rf.matchIndex[server] = newMatchIndex
+										rf.nextIndex[server] = rf.matchIndex[server] + 1
+										// 计算新的commitIndex，即所有matchIndex的中位数
+										newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
+										if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
+											// 只能提交当前任期内的日志
+											DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
+											rf.commitIndex = newCommitIndex
+											// 通知applier可以apply
+											rf.applyCond.Broadcast()
+										}
 									}
 								} else {
 									// 日志不匹配，回退nextIndex

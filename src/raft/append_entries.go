@@ -20,8 +20,8 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer func() {
+		DPrintf("%s AppendEntries from [%d] args:%v, reply: %v", formatRaft(rf), args.LeaderId, args, reply)
 		rf.mu.Unlock()
-		DPrintf("%s AppendEntries from [%d]", formatRaft(rf), args.LeaderId)
 	}()
 	if rf.currentTerm > args.Term {
 		reply.Term = rf.currentTerm

@@ -205,38 +205,35 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Lock()
 	defer func() {
-		rf.mu.Unlock()
 		DPrintf("%s Start index:[%d], term:[%d], isLeader:[%v], command:%d", formatRaft(rf), index, term, isLeader, command)
+		rf.mu.Unlock()
 	}()
-	for {
-		if rf.killed() {
-			isLeader = false
-			break
-		}
 
-		if rf.role != Leader {
-			// 如果不是leader则立即返回
-			isLeader = false
-			break
-		}
-
-		// 写入到本地日志中
-		term = rf.currentTerm
-		index = len(rf.log)
-		rf.log = append(rf.log, Entry{
-			Command: command,
-			Term:    term,
-		})
-		rf.persist()
-
-		rf.nextIndex[rf.me] = index + 1
-		rf.matchIndex[rf.me] = index
-
-		// 通知boardcast协程同步日志
-		rf.broadcastCond.Broadcast()
-
-		break
+	if rf.killed() {
+		isLeader = false
+		return index, term, isLeader
 	}
+
+	if rf.role != Leader {
+		// 如果不是leader则立即返回
+		isLeader = false
+		return index, term, isLeader
+	}
+
+	// 写入到本地日志中
+	term = rf.currentTerm
+	index = len(rf.log)
+	rf.log = append(rf.log, Entry{
+		Command: command,
+		Term:    term,
+	})
+	rf.persist()
+
+	rf.nextIndex[rf.me] = index + 1
+	rf.matchIndex[rf.me] = index
+
+	// 通知boardcast协程同步日志
+	rf.broadcastCond.Broadcast()
 
 	return index, term, isLeader
 }
