@@ -3,6 +3,8 @@ package raft
 import (
 	"fmt"
 	"time"
+
+	"6.824/pkg/findk"
 )
 
 //
@@ -197,7 +199,6 @@ func (rf *Raft) ticker() {
 		<-rf.electionTimer.C
 		// 心跳已超时，尝试发起选举
 		rf.mu.Lock()
-		DPrintf("%s 心跳超时", formatRaft(rf))
 		if rf.role != Leader {
 			DPrintf("%s 心跳超时，尝试发起选举", formatRaft(rf))
 			// 没有收到心跳，开启新一轮选举
@@ -218,25 +219,59 @@ func (rf *Raft) broadcastHeartbeat() {
 			for peer := range rf.peers {
 				if peer != rf.me {
 					go func(server int) {
+						rf.mu.Lock()
+
+						if rf.role != Leader {
+							rf.mu.Unlock()
+							return
+						}
+
 						args := new(AppendEntriesArgs)
 						args.Term = rf.currentTerm
 						args.LeaderId = rf.me
 						args.PrevLogIndex = rf.nextIndex[server] - 1
 						args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
-						if args.PrevLogIndex < len(rf.log)-1 {
-							args.Entries = rf.log[args.PrevLogIndex+1:]
-						}
+						args.Entries = rf.log[args.PrevLogIndex+1:]
 						args.LeaderCommit = rf.commitIndex
+
+						rf.mu.Unlock()
 
 						reply := new(AppendEntriesReply)
 						if rf.sendAppendEntries(server, args, reply) {
-							DPrintf("%s sendHeartbeat to [%d] args: %v, reply: %v", formatRaft(rf), server, args, reply)
 							rf.mu.Lock()
-							if rf.currentTerm < reply.Term {
-								rf.currentTerm, rf.votedFor = reply.Term, -1
-								rf.persist()
-								rf.changeRoleLocked(Follower)
+
+							DPrintf("%s sendHeartbeat to [%d] reply:{term: %d, success: %v}", formatRaft(rf), server, reply.Term, reply.Success)
+
+							if rf.currentTerm == args.Term {
+								if reply.Term > rf.currentTerm {
+									// 有一个新的任期
+									rf.currentTerm, rf.votedFor = reply.Term, -1
+									rf.persist()
+									rf.changeRoleLocked(Follower)
+								} else {
+									if reply.Success {
+										// 同步成功
+										rf.nextIndex[server] += len(args.Entries)
+										rf.matchIndex[server] = rf.nextIndex[server] - 1
+										// 计算新的commitIndex，即所有matchIndex的中位数
+										newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
+										if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
+											// 只能提交当前任期内的日志
+											DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
+											rf.commitIndex = newCommitIndex
+											// 通知applier可以apply
+											rf.applyCond.Broadcast()
+										}
+									} else {
+										// 日志不匹配，回退nextIndex
+										rf.nextIndex[server]--
+										if rf.nextIndex[server] < 1 {
+											panic(fmt.Sprintf("rf.nextIndex[%d] < 1", server))
+										}
+									}
+								}
 							}
+
 							rf.mu.Unlock()
 						} else {
 							DPrintf("%s sendHeartbeat to [%d] failed", formatRaft(rf), server)

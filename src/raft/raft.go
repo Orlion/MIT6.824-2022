@@ -312,9 +312,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// 心跳检测
 	go rf.ticker()
-	// 广播日志
-	go rf.broadcastLog()
+	go rf.broadcastHeartbeat()
 	// 异步apply
 	go rf.applier(applyCh)
+	// 广播日志
+	rf.broadcastLog()
 	return rf
 }
