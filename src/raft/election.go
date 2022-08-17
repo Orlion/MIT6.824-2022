@@ -3,8 +3,6 @@ package raft
 import (
 	"fmt"
 	"time"
-
-	"6.824/pkg/findk"
 )
 
 //
@@ -226,60 +224,9 @@ func (rf *Raft) broadcastHeartbeat() {
 							return
 						}
 
-						args := new(AppendEntriesArgs)
-						args.Term = rf.currentTerm
-						args.LeaderId = rf.me
-						args.PrevLogIndex = rf.nextIndex[server] - 1
-						args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
-						args.Entries = rf.log[args.PrevLogIndex+1:]
-						args.LeaderCommit = rf.commitIndex
+						rf.sendLogLocked(server, true)
 
 						rf.mu.Unlock()
-
-						reply := new(AppendEntriesReply)
-						if rf.sendAppendEntries(server, args, reply) {
-							rf.mu.Lock()
-
-							DPrintf("%s sendHeartbeat to [%d] reply:{term: %d, success: %v}", formatRaft(rf), server, reply.Term, reply.Success)
-
-							if rf.currentTerm == args.Term {
-								if reply.Term > rf.currentTerm {
-									// 有一个新的任期
-									rf.currentTerm, rf.votedFor = reply.Term, -1
-									rf.persist()
-									rf.changeRoleLocked(Follower)
-								} else {
-									if reply.Success {
-										// 同步成功
-										// 注意可能会加多次所以使用args.PrevLogIndex来计算
-										newMatchIndex := args.PrevLogIndex + len(args.Entries)
-										if newMatchIndex > rf.matchIndex[server] {
-											rf.matchIndex[server] = newMatchIndex
-											rf.nextIndex[server] = rf.matchIndex[server] + 1
-											// 计算新的commitIndex，即所有matchIndex的中位数
-											newCommitIndex := findk.Ints(rf.matchIndex, len(rf.matchIndex)/2+1)
-											if rf.commitIndex < newCommitIndex && rf.log[newCommitIndex].Term == rf.currentTerm {
-												// 只能提交当前任期内的日志
-												DPrintf("%s commitIndex: %d => %d", formatRaft(rf), rf.commitIndex, newCommitIndex)
-												rf.commitIndex = newCommitIndex
-												// 通知applier可以apply
-												rf.applyCond.Broadcast()
-											}
-										}
-									} else {
-										// 日志不匹配，回退nextIndex
-										rf.nextIndex[server]--
-										if rf.nextIndex[server] < 1 {
-											panic(fmt.Sprintf("rf.nextIndex[%d] < 1", server))
-										}
-									}
-								}
-							}
-
-							rf.mu.Unlock()
-						} else {
-							DPrintf("%s sendHeartbeat to [%d] failed", formatRaft(rf), server)
-						}
 					}(peer)
 				}
 			}

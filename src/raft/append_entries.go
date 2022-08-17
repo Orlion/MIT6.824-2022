@@ -10,8 +10,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  // 当前任期
-	Success bool // 如果follower的prevLogTerm和prevLogIndex匹配上了则返回true
+	Term          int  // 当前任期
+	Success       bool // 如果follower的prevLogTerm和prevLogIndex匹配上了则返回true
+	ConflictIndex int  // nextIndex回退优化 https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
+	ConflictTerm  int  // nextIndex回退优化
 }
 
 //
@@ -43,8 +45,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 追加日志到本机
 	// 检查上一条日志任期是否符合
-	if args.PrevLogIndex > -1 && (len(rf.log) < args.PrevLogIndex+1 || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm) {
-		return
+	if args.PrevLogIndex > -1 {
+		// https://thesquareplanet.com/blog/students-guide-to-raft/#an-aside-on-optimizations
+		if len(rf.log) < args.PrevLogIndex+1 {
+			// follower的日志中没有args.PrevLogIndex
+			reply.ConflictIndex = len(rf.log)
+			return
+		}
+
+		if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+			// 如果上一条日志的任期没对上
+			// 则返回冲突任期与该任期的第一条日志的索引
+			// todo: 算法可以优化
+			reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+			for i := 1; i <= args.PrevLogIndex; i++ {
+				if rf.log[i].Term == reply.ConflictTerm {
+					reply.ConflictIndex = i
+					break
+				}
+			}
+			return
+		}
 	}
 
 	// 验证没有问题回复成功
