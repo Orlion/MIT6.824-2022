@@ -20,5 +20,33 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// 删除lastApplied(包括lastApplied)之前的日志
+	if index <= rf.lastSnapshotIndex || index > rf.lastApplied {
+		return
+	}
+
+	// 删除index以及index之前的日志
+	newLog := make([]Entry, 0, rf.getLastLogEntryIndexLocked()-index)
+	copy(newLog, rf.getLogEntriesLocked(index+1, -1))
+
+	rf.lastSnapshotTerm = rf.getLogEntryByIndexLocked(index).Term
+	rf.lastSnapshotIndex = index
+	rf.log = newLog
+
+	rf.persistStateAndSnapshot(snapshot)
+}
+
+func (rf *Raft) getLogEntryByIndexLocked(index int) Entry {
+	return rf.log[index-rf.lastSnapshotIndex]
+}
+
+func (rf *Raft) getLastLogEntryIndexLocked() int {
+	return rf.lastSnapshotIndex + len(rf.log)
+}
+
+func (rf *Raft) getLogEntriesLocked(from int, to int) []Entry {
+	if to > -1 {
+		return rf.log[from-rf.lastSnapshotIndex : to-rf.lastSnapshotIndex]
+	} else {
+		return rf.log[from-rf.lastSnapshotIndex:]
+	}
 }

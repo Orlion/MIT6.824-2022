@@ -78,9 +78,11 @@ type Raft struct {
 	// state a Raft server must maintain.
 	// 持久化状态
 	// 同一任期不能投票两次，因为有可能投出两个leader出来，如果不持久化的话重启后有可能在相同的任期投出两次票
-	currentTerm int // 服务器已知最新任期
-	votedFor    int // 当前任期内收到投票的候选人id
-	log         []Entry
+	currentTerm       int // 服务器已知最新任期
+	votedFor          int // 当前任期内收到投票的候选人id
+	log               []Entry
+	lastSnapshotIndex int // 快照中包含的最后日志条目的索引值
+	lastSnapshotTerm  int // 快照中包含的最后日志条目的任期号
 	// 非持久化状态
 	role        Role // 当前的角色
 	commitIndex int  // 已知已提交的最高的日志条目的索引
@@ -121,6 +123,25 @@ func (rf *Raft) persist() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+}
+
+func (rf *Raft) persistStateAndSnapshot(snapshot []byte) {
+	// Your code here (2C).
+	// Example:
+	// w := new(bytes.Buffer)
+	// e := labgob.NewEncoder(w)
+	// e.Encode(rf.xxx)
+	// e.Encode(rf.yyy)
+	// data := w.Bytes()
+	// rf.persister.SaveRaftState(data)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveStateAndSnapshot(data, snapshot)
 }
 
 //
